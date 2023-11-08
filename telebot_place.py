@@ -3,74 +3,104 @@ from telebot import types
 
 
 class Place:
-    pass
+
+    def __init__(self, place_name):
+        self.photo_list = []
+        self.place_name = place_name
+        self.description = None
+
+    def add_photo(self, photo):
+        if photo:
+            self.photo_list.append(photo)
+        return len(self.photo_list)
+
+    def add_description(self, user_description):
+        self.description = user_description
+        return bool(self.description)
 
 
 class TelegramBot:
     start_button = {}
-    user_photo = {}
+    user_list = {}
     places = []
+    name_place = None
 
     def __init__(self, token):
-        name_place = None
         self.token = token
         self.bot = telebot.TeleBot(self.token)
         self.markup_inline = types.InlineKeyboardMarkup()
         self.markup_reply = None
-        self.chat_id = None
-        self.user_id = None
 
     def get_chat_id_and_start(self):
         @self.bot.message_handler(commands=['start'])
         def start(message):
-            self.chat_id = message.chat.id
-            self.user_id = message.from_user.id
-            if not self.start_button:
+            if message.from_user.id not in self.user_list:
+                self.user_list.setdefault(message.from_user.id, [])
+            if message.chat.id not in self.start_button:
                 self.markup_reply = types.ReplyKeyboardMarkup(resize_keyboard=True)
                 btn1 = types.KeyboardButton('Добавить фото')
                 btn2 = types.KeyboardButton('Посмотреть фото')
                 self.markup_reply.row(btn2, btn1)
 
-                self.start_button[self.chat_id] = self.markup_reply
+                self.start_button[message.chat.id] = self.markup_reply
 
-                self.bot.send_message(self.chat_id, 'Привет', reply_markup=self.markup_reply)
+                self.bot.send_message(message.chat.id, 'Привет', reply_markup=self.markup_reply)
             else:
-                self.bot.send_message(self.chat_id, "Привет!",
-                                      reply_markup=self.start_button[self.chat_id])
+                self.bot.send_message(message.chat.id, "Привет!",
+                                      reply_markup=self.start_button[message.chat.id])
+
+    @staticmethod
+    def check_place(user_list: list, text):
+        for item in user_list:
+            if item.place_name == text:
+                return user_list[user_list.index(item)]
+        return False
 
     def button_click_add_photo(self):
 
         @self.bot.message_handler(func=lambda message: message.text == 'Посмотреть фото')
         def look_photo(mess):
-            for pic_list in self.user_photo[self.user_id]:
-                for pic in self.user_photo[self.user_id][pic_list]:
-                    self.bot.send_photo(self.chat_id, photo=pic)
+            markup = types.InlineKeyboardMarkup()
+
+            for place in self.user_list[mess.from_user.id]:
+                markup.add(types.InlineKeyboardButton(text=place.place_name, callback_data=place.place_name))
+            self.bot.send_message(mess.chat.id, 'Выбери место', reply_markup=markup)
+
+            @self.bot.callback_query_handler(func=lambda callback: True)
+            def callback_func(callback):
+                for place_from_callback in self.user_list[mess.from_user.id]:
+                    place_name = place_from_callback.place_name
+                    if callback.data == place_name:
+                        self.bot.send_message(mess.chat.id, place_name)
+                        for pic in place_from_callback.photo_list:
+                            self.bot.send_photo(mess.chat.id, photo=pic)
+                        break
+                    else:
+                        continue
 
         @self.bot.message_handler(func=lambda message: message.text == 'Добавить фото')
         def app_photo(message):
             markup_start = types.ReplyKeyboardMarkup(resize_keyboard=True)
             btn_start = types.KeyboardButton('/start')
             markup_start.row(btn_start)
-            self.bot.send_message(self.chat_id, 'Введи место', reply_markup=markup_start)
+            self.bot.send_message(message.chat.id, 'Введи место', reply_markup=markup_start)
 
             @self.bot.message_handler(content_types=['text'])
-            def get_name_place(mess):
-                self.name_place = mess.text
-                tmp_dict = {self.name_place: []}
-                if self.user_id not in self.user_photo:
-                    self.user_photo[self.user_id] = tmp_dict
-                    self.bot.send_message(self.chat_id, 'Добавь фотографию')
+            def get_name_place(mess_name_place):
+                if not self.check_place(self.user_list[mess_name_place.from_user.id], mess_name_place.text):
+                    self.user_list[mess_name_place.from_user.id].append(Place(mess_name_place.text))
+                    self.name_place = mess_name_place.text
                 else:
-                    self.user_photo[self.user_id][self.name_place] = []
-                    self.bot.send_message(self.chat_id, 'Добавь фотографию')
+                    self.name_place = mess_name_place.text
+                self.bot.send_message(mess_name_place.chat.id, 'Добавь фотографию')
 
                 @self.bot.message_handler(content_types=['photo'])
                 def get_photo(message_for_photo):
-                    print(message_for_photo.media_group_id)
                     photo_id = message_for_photo.photo[-1].file_id
-                    self.user_photo[self.user_id][self.name_place].append(photo_id)
-                    self.bot.send_message(self.chat_id, "Вы в главном меню!",
-                                          reply_markup=self.start_button[self.chat_id])
+                    place = self.check_place(self.user_list[message_for_photo.from_user.id], self.name_place)
+                    place.add_photo(photo_id)
+                    self.bot.send_message(message_for_photo.chat.id, "Вы в главном меню!",
+                                          reply_markup=self.start_button[message.chat.id])
 
     def pull(self):
         self.get_chat_id_and_start()
@@ -78,7 +108,7 @@ class TelegramBot:
         self.bot.polling(none_stop=True)
 
 
-token = "5548068409:AAFHj4UkbPkyUh5QlZ5la3CJqGnECNWpI1g"
+token_bot = "5548068409:AAFHj4UkbPkyUh5QlZ5la3CJqGnECNWpI1g"
 
-bot = TelegramBot(token)
+bot = TelegramBot(token_bot)
 bot.pull()
