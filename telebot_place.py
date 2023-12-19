@@ -7,10 +7,12 @@ import json
 
 class Place:
 
-    def __init__(self, place_name):
-        self.photo_list = []
+    def __init__(self, place_name, description=None, photo_list=None):
+        if photo_list is None:
+            photo_list = []
+        self.photo_list = photo_list
         self.place_name = place_name
-        self.description = None
+        self.description = description
 
     def add_photo(self, photo=False):
         if photo:
@@ -61,6 +63,7 @@ class TelegramBot:
     start_button = {}
     user_list = {}
     name_place = {}
+    test_list = {}
 
     def __init__(self, token):
         self.token = token
@@ -93,20 +96,32 @@ class TelegramBot:
             if old:
                 if str(key) in old:
                     for place in data[key]:
-                        if place not in old[str(key)]:
-                            old[str(key)].append(place)
+                        name_place = place['place_name']
+                        for old_place in old[str(key)]:
+                            if name_place == old_place['place_name']:
+                                old_place['photo_list'] = list(set(old_place['photo_list']).union(place['photo_list']))
+                            else:
+                                old[str(key)].append(place)
+
                 else:
-                    old.setdefault(key, data)
+                    old.setdefault(str(key), data[key])
+                new = []
+                for record_place in old[str(key)]:
+                    if record_place not in new:
+                        new.append(record_place)
+                old[str(key)] = new
                 json.dump(old, file_record)
 
             else:
                 json.dump(data, file_record)
 
-    @staticmethod
-    def read_data(key, file_name='data_users.json'):
-        with open(file_name, encoding='utf-8') as file_read:
-            tmp_user_list = json.load(file_read)
-            return tmp_user_list[key]
+    def read_data(self, key, file_name='data_users.json'):
+        try:
+            with open(file_name, encoding='utf-8') as file_read:
+                tmp_user_list = json.load(file_read)
+                return tmp_user_list[str(key)]
+        except FileNotFoundError:
+            self.bot.send_message(chat_id=key, text='Еще нет фотографий')
 
     def get_chat_id_and_start(self):
         @self.bot.message_handler(commands=['start'])
@@ -127,28 +142,44 @@ class TelegramBot:
                                       reply_markup=self.start_button[message.chat.id])
 
     @staticmethod
-    def check_place(user_list: list, text):
-        for item in user_list:
-            if item.place_name == text:
-                return user_list[user_list.index(item)]
+    def check_place(user_list, key, text):
+        if isinstance(user_list, dict):
+            user_dict = user_list[key]
+            for item in user_dict:
+                if item.place_name == text:
+                    return user_dict[user_dict.index(item)]
+        else:
+            for item in user_list:
+                if item['place_name'] == text:
+                    return user_list[user_list.index(item)]
+
         return False
+
+    @staticmethod
+    def crate_class_place(attrs: dict):
+        name_attr = ('place_name', "description", 'photo_list')
+        place_how_klass = Place(attrs[name_attr[0]], attrs[name_attr[1]], attrs[name_attr[2]])
+        return place_how_klass
+
+    def create_work_list_before_read(self, list_place):
+        work_list = [self.crate_class_place(place) for place in list_place]
+        return work_list
 
     def button_click_add_photo(self):
 
         @self.bot.message_handler(func=lambda message: message.text == 'Посмотреть фото')
         def look_photo(mess):
             markup = types.InlineKeyboardMarkup()
-            if self.user_list:
-                for place in self.user_list[mess.from_user.id]:
+            try:
+                for place in self.create_work_list_before_read(self.read_data(mess.chat.id)):
                     markup.add(types.InlineKeyboardButton(text=place.place_name, callback_data=place.place_name))
-            else:
-                for place in self.read_data(mess.from_user.id):
-                    markup.add(types.InlineKeyboardButton(text=place['place_name'], callback_data=place['place_name']))
-            self.bot.send_message(mess.chat.id, 'Выбери место', reply_markup=markup)
+                self.bot.send_message(mess.chat.id, 'Выбери место', reply_markup=markup)
+            except TypeError:
+                pass
 
             @self.bot.callback_query_handler(func=lambda callback: True)
             def callback_func(callback):
-                for place_from_callback in self.user_list[mess.from_user.id]:
+                for place_from_callback in self.create_work_list_before_read(self.read_data(mess.chat.id)):
                     place_name = place_from_callback.place_name
                     if callback.data == place_name:
                         media_group = []
@@ -172,26 +203,38 @@ class TelegramBot:
 
             @self.bot.message_handler(content_types=['text'])
             def get_name_place(mess_name_place):
-                if not self.check_place(self.user_list[mess_name_place.from_user.id], mess_name_place.text):
-                    self.user_list[mess_name_place.from_user.id].append(Place(mess_name_place.text))
-                    self.name_place[mess_name_place.chat.id] = mess_name_place.text
+                if self.user_list:
+                    use_dict = self.user_list.copy()
                 else:
-                    self.name_place[mess_name_place.chat.id] = mess_name_place.text
+                    use_dict = {message.chat.id: self.create_work_list_before_read(self.read_data(message.chat.id))}
+
+                self.name_place[mess_name_place.chat.id] = mess_name_place.text
                 self.bot.send_message(mess_name_place.chat.id, 'Добавь фотографию')
 
                 @self.bot.message_handler(content_types=['photo'])
                 def get_photo(message_for_photo):
+                    if message_for_photo.chat.id not in self.start_button:
+                        self.markup_reply = types.ReplyKeyboardMarkup(resize_keyboard=True)
+                        btn1 = types.KeyboardButton('Добавить фото')
+                        btn2 = types.KeyboardButton('Посмотреть фото')
+                        self.markup_reply.row(btn2, btn1)
+
+                        self.start_button[message_for_photo.chat.id] = self.markup_reply
                     photo_id = message_for_photo.photo[-1].file_id
-                    place = self.check_place(self.user_list[message_for_photo.from_user.id],
+                    if not self.check_place(use_dict, message_for_photo.from_user.id,
+                                            self.name_place[mess_name_place.chat.id]):
+                        use_dict[mess_name_place.from_user.id].append(Place(self.name_place[mess_name_place.chat.id]))
+
+                    place = self.check_place(use_dict, message_for_photo.from_user.id,
                                              self.name_place[mess_name_place.chat.id])
                     place.add_photo(photo_id)
                     self.bot.reply_to(message_for_photo,
                                       choice(self.funny_answer),
                                       reply_markup=self.start_button[message.chat.id])
 
-                    data_for_record = self.interpreter_for_record(self.user_list, mess_name_place.chat.id)
-                    print(data_for_record)
+                    data_for_record = self.interpreter_for_record(use_dict, mess_name_place.chat.id)
                     self.record_data(data_for_record)
+                    self.user_list.clear()
 
     def pull(self):
         self.get_chat_id_and_start()
